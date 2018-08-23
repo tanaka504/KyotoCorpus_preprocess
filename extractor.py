@@ -51,22 +51,24 @@ def get_docs(data):
 			tag_id = int(tag_col[1])
 			sgmnt.tag_id = tag_id
 			sgmnt.chunk_info = chunk
-			print(tag_id, segments)
-			assert tag_id in segments.keys(), "Invalid value in segments"
+			print(tag_id, segments.keys())
+			assert tag_id not in segments.keys(), "Invalid value in segments"
 			segments[tag_id] = sgmnt
 
 		# save chunks to sentences
 		elif line == "EOS":
-			assert len(chunks) > 1, "Invalid process in Chunks"
-			assert sid in sentences.keys(), "Invalid value in sentences"
+			assert len(segments) > 1, "Invalid process in segments"
+			assert sid not in sentences.keys(), "Invalid value in sentences"
+
 			sentences[sid] = segments
 			segments.clear()
 		
 		# save word to segment
 		else:
 			col = line.split("\n")
-			assert len(sgmnt) < 1, "You must assign some idea about not belonging words"
-			sgmnt[tag_id].wd_list.append(col[0])
+			#assert len(sgmnt) < 1, "You must assign some idea about not belonging words"
+			segments[tag_id].wd_list.append(col[0])
+
 			
 	return sentences
 
