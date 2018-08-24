@@ -2,3 +2,5 @@
 __pycache__/
 kyoto_WDL_corpus/
 kyoto_txt_corpus/
+!kyoto_WDL_corpus/.gitkeep
+!kyoto_txt_corpus/.gitkeep
