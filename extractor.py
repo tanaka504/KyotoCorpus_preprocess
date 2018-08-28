@@ -3,16 +3,20 @@ import re
 from pprint import pprint
 import nltk
 import json
+import sys
+
 
 # 正規表現のパターン
-sid_pattern = re.compile(r"S-ID:(.*?)\sJUMAN")
+sid_pattern = re.compile(r"S-ID:(.*?)\s")
 dst_pattern = re.compile(r"(.*?)[DPIA]")
 coref_pattern = re.compile(r'=')
 rel_pattern = re.compile(r'<rel (.*?)/>')
 ne_pattern = re.compile(r'<ne (.*?)/>')
 file_pattern = re.compile(r'^w201106-(.*?).KNP')
+txt_file_pattern = re.compile(r'^(.*?).KNP$')
 
-root_path = './kyoto_WDL_corpus/dat/rel/'
+wdl_path = './kyoto_WDL_corpus/dat/rel/'
+txt_path = './kyoto_txt_corpus/dat/rel'
 
 # タグ単位のクラス
 class Segment:
@@ -34,7 +38,11 @@ class Segment:
 						self.get_pattern('target', label),
 						self.get_pattern('sid', label),
 						self.get_pattern('tag', label))
-					   for label in labels if coref_pattern.match(self.get_pattern('type', label))]
+					   for label in labels if coref_pattern.match(self.get_pattern('type', label)) if self.is_valid_tag(label)]
+    
+    def is_valid_tag(self, label):
+        return False if self.get_pattern('type', label) == '' or self.get_pattern('target', label) == '' or self.get_pattern('sid', label) == '' or self.get_pattern('tag', label) == '' else True
+        
     # extract ner tag
     def ne_extract(self):
         labels = ne_pattern.findall(self.label)
@@ -43,7 +51,7 @@ class Segment:
 						for label in labels]
 	# extract tag info with pattern matching
     def get_pattern(self, key, label):
-        return re.search(r'{}=\"(.*?)\"'.format(key), label).group(1)
+        return re.search(r'{}=\"(.*?)\"'.format(key), label).group(1) if re.search(r'{}=\"(.*?)\"'.format(key), label) else ''
 
     # return start and end id
     def get_idx(self):
@@ -72,6 +80,7 @@ def get_tags(data):
     sentences = {}
     chunk_sent = []
     for idx, line in enumerate(data, 1):
+        #print('processing line {} ...\n'.format(idx))
 		# get sentence id
         if line[0] == "#":
             sid = str(sid_pattern.search(line).group(1))
@@ -172,19 +181,24 @@ def get_clusters(doc):
     return cluster
 
 # Output JSON file
+# 京大コーパスで speaker はすべて著者となるので同一の speaker タグを付与
+# doc_key は genre の特徴量に用いられる，京大コーパスの場合文書かテキストコーパスかの２種類のタグを付与
 def finalize(doc, chunks, genre):
     doc_data = {}
     #sentences = [[word[1] for mention in sentence.values() for word in mention.wd_list] for sentence in doc.values()]
     sentences = [[word['wd'] for chunk in sentence for word in chunk.words ]for sentence in chunks]
+    speakers = [['Speaker#1' for chunk in sentence for word in chunk.words] for sentence in chunks]
     cluster = get_clusters(doc)
     ner = [mention.get_idx() + [word[0]] for sentence in doc.values() for mention in sentence.values() for word in mention.ne_word if len(mention.ne_word) > 0]
-    parse = chunk_parser(chunks)
-    
+    #parse = chunk_parser(chunks)
+    parse = []
+
     doc_data['sentences'] = sentences
     doc_data['clusters'] = [v for v in cluster.values()]
     doc_data['ner'] = ner
     doc_data['genre'] = genre
     doc_data['constituents'] = parse
+    doc_data['speakers'] = speakers
 
 
     #with open("./train_data/train.japanese.jsonlines", "w") as out_f:
@@ -213,19 +227,34 @@ def preprocessor(filename):
         data = f.read().split("\n")
         data.remove("")
         doc, chunks = get_tags(data)
-        [print(v) for sgmnt in doc.values() for v in sgmnt.values()]
-        [print(chunk) for chunk in chunks[0]]
+        #[print(v) for sgmnt in doc.values() for v in sgmnt.values()]
+        #[print(chunk) for chunk in chunks[0]]
     return doc, chunks
 
 def main():
-    with open('./train_data/train.japanese.jsonlines', 'w') as outfile:
+    with open('./train_data/all.japanese.jsonlines', 'w') as outfile:
+        # 京大ウェブ文書リードコーパスの処理
         genre = 'wb/00'
-        i = 0
-        dir_path = root_path + 'w201106-000{0:02d}'.format(i)
-        files = [f for f in os.listdir(dir_path) if os.path.isfile(os.path.join(dir_path, f)) and file_pattern.match(f)]
-        doc, chunks = preprocessor(os.path.join(dir_path, files[0]))
-        doc_data = finalize(doc, chunks, genre)
-        print(doc_data)
+        for i in range(25):
+            dir_path = wdl_path + 'w201106-000{0:02d}'.format(i)
+            files = [f for f in os.listdir(dir_path) if os.path.isfile(os.path.join(dir_path, f)) and file_pattern.match(f)]
+            for filename in files:
+                print('{}/{}'.format(dir_path, filename))
+                doc, chunks = preprocessor(os.path.join(dir_path, filename))
+                doc_data = finalize(doc, chunks, genre)
+                outfile.write(json.dumps(doc_data))
+                outfile.write('\n')
+        # 京大テキストコーパスの処理
+        genre = 'tx/00'
+        files = [f for f in os.listdir(txt_path) if os.path.isfile(os.path.join(txt_path, f)) and txt_file_pattern.match(f)]
+        for filename in files:
+            print('{}/{}'.format(txt_path, filename))
+            doc, chunks = preprocessor(os.path.join(txt_path, filename))
+            doc_data = finalize(doc, chunks, genre)
+            outfile.write(json.dumps(doc_data))
+            outfile.write('\n')
+
+    print('Complete!')
 
 if __name__ == "__main__":
     main()

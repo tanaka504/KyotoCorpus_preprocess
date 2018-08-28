@@ -4,3 +4,4 @@ __pycache__/
 !kyoto_txt_corpus/.gitkeep
 kyoto_WDL_corpus/
 kyoto_txt_corpus/
+train_data/
