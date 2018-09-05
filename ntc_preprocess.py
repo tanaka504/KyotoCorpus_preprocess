@@ -5,12 +5,13 @@ import nltk
 import json
 import sys
 import codecs
-
+from collections import Counter
 
 # 正規表現のパターン
 sid_pattern = re.compile(r"S-ID:(.*?)\s")
 dst_pattern = re.compile(r"(.*?)[DPIA]")
 coref_pattern = re.compile(r'eq=\"(.*?)\"')
+label_pattern = re.compile(r'(.*?)=\"(.*?)\"')
 
 file_pattern = re.compile(r'^(.*?).ntc$')
 
@@ -45,15 +46,20 @@ class NE:
 # タグ単位と文節単位で文情報を整理
 def get_tags(data):
     wd_idx = 0
+    sent_id = 0
     ne = None
     corefs = {}
+    distance = {}
+    srls = {}
     nes = []
     chunk = {}
     chunk_sent = []
+
     for idx, line in enumerate(data, 1):
         #print('processing line {} ...\n'.format(idx))
 		# get sentence id
         if line[0] == "#":
+            sent_id += 1
             sid = str(sid_pattern.search(line).group(1))
 		
 		# get chunk id dst
@@ -99,16 +105,51 @@ def get_tags(data):
                 eq_id = coref_pattern.search(col[7]).group(1)
                 if eq_id in corefs.keys(): corefs[eq_id].append(wd_idx)
                 else: corefs[eq_id] = [wd_idx]
+
+                if eq_id in distance: distance[eq_id].append(sent_id)
+                else: distance[eq_id] = [sent_id]
+
+            # SRL Process
+            if not col[7] == '_':
+                assert not wd_idx in srls.keys(), 'Unexpect key in srls'
+                srls[wd_idx] = {label_pattern.search(tag).group(1) : label_pattern.search(tag).group(2) for tag in col[7].split(" ")}
             
             # Chunk Process
             chunk[chunk_id].words.append({'wd_idx': wd_idx,
                 'wd': col[0],
                 'pos':col[3]})
             wd_idx += 1
-    
+    #c = Counter([sids[0] - sid for sids in distance.values() for sid in sids[1:]])
+    #[print('{}:{}'.format(k,v)) for k, v in c.items()]
     clusters = [[[idx, idx] for idx in eq] for eq in corefs.values()]
+    srl_list = get_srls(srls)
 
-    return nes, clusters, chunk_sent
+    return nes, clusters, chunk_sent, srl_list
+
+
+def get_srls(srls):
+    srl_list = []
+    id2wd = {dst : wd_idx for wd_idx, labels in srls.items() for label, dst in labels.items() if label == 'id'}
+    for wd_idx, labels in srls.items():
+        for kaku, dst in labels.items():
+            if kaku == 'ga':
+                if re.match(r'exo', dst):
+                    srl_list.append([wd_idx, -1, -1, 'GA'])
+                elif dst in id2wd.keys():
+                    srl_list.append([wd_idx, id2wd[dst], id2wd[dst], 'GA'])
+                else:
+                    pass
+            elif kaku == 'o':
+                if re.match(r'exo', dst):
+                    srl_list.append([wd_idx, -1, -1, 'WO'])
+                elif dst in id2wd.keys():
+                    srl_list.append([wd_idx, id2wd[dst], id2wd[dst], 'WO'])
+                else:
+                    pass
+            else:
+                pass
+
+    return srl_list
 
 # 係り元の根の文節番号を再帰的に導出
 def get_root(sentence, idx, src):
@@ -146,7 +187,7 @@ def chunk_parser(sentences):
 # Output JSON file
 # 京大コーパスで speaker はすべて著者となるので同一の speaker タグを付与
 # doc_key は genre の特徴量に用いられる，京大コーパスの場合文書かテキストコーパスかの２種類のタグを付与
-def finalize(nes, clusters, chunks, genre):
+def finalize(nes, clusters, chunks, genre, srls):
     doc_data = {}
     #sentences = [[word[1] for mention in sentence.values() for word in mention.wd_list] for sentence in doc.values()]
     sentences = [[word['wd'] for chunk in sentence for word in chunk.words ]for sentence in chunks]
@@ -160,6 +201,7 @@ def finalize(nes, clusters, chunks, genre):
     doc_data['doc_key'] = genre
     doc_data['constituents'] = parse
     doc_data['speakers'] = speakers
+    doc_data['srls'] = srls
 
 
     #with open("./train_data/train.japanese.jsonlines", "w") as out_f:
@@ -171,10 +213,10 @@ def preprocessor(filename):
     with open(filename, "r", encoding='utf-8') as f:
         data = f.read().split("\n")
         data.remove("")
-        nes, clusters, chunks= get_tags(data)
+        nes, clusters, chunks, srls= get_tags(data)
         #[print(v) for sgmnt in doc.values() for v in sgmnt.values()]
         #[print(chunk) for chunk in chunks[0]]
-    return nes, clusters, chunks
+    return nes, clusters, chunks, srls
 
 def preprocess_ntc():
     with codecs.open('./train_data/all.ntc_japanese.jsonlines', 'w', 'utf-8') as outfile:
@@ -184,8 +226,8 @@ def preprocess_ntc():
             #print('{}/{}'.format(dir_path, filename))
             #print(genre, end='\n')
             try:
-                nes, clusters, chunks = preprocessor(os.path.join(ntc_path, filename))
-                doc_data = finalize(nes, clusters, chunks, genre)
+                nes, clusters, chunks, srls = preprocessor(os.path.join(ntc_path, filename))
+                doc_data = finalize(nes, clusters, chunks, genre, srls)
             except:
                 print('skip {}'.format(filename))
                 continue
@@ -196,11 +238,10 @@ def preprocess_ntc():
 
 # test at 1 file
 def test():
-    files = [f for f in os.listdir(ntc_path) if os.path.isfile(os.path.join(ntc_path, f)) and ntc_file_pattern.match(f)]
-    nes, clusters, chunks = preprocessor(os.path.join(ntc_path, files[20]))
-    pprint(nes)
-    pprint(clusters)
-
+    files = [f for f in os.listdir(ntc_path) if os.path.isfile(os.path.join(ntc_path, f)) and file_pattern.match(f)]
+    nes, clusters, chunks, srls = preprocessor(os.path.join(ntc_path, files[20]))
+    pprint(srls)
+    
 
 if __name__ == "__main__":
-    preprocess_ntc()
+    test()
