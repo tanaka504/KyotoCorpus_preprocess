@@ -46,18 +46,21 @@ class NE:
 # タグ単位と文節単位で文情報を整理
 def get_tags(data):
     wd_idx = 0
+    sent_id = 0
     ne = None
     corefs = {}
     nes = []
-    srls = {}
     chunk = {}
     chunk_sent = []
+    doc_srl = []
+
     for idx, line in enumerate(data, 1):
         #print('processing line {} ...\n'.format(idx))
 		# get sentence id (BCCWJ コーパスでは意味を成さない)
         if line[0] == "#":
-            #sid = str(sid_pattern.search(line).group(1))
-            pass
+            if sent_id > 0: doc_srl.append(get_srls(srls))
+            srls = {}
+            sent_id += 1
 		# get chunk id dst
         elif line[0] == "*":
             chunk_col = line.split(" ")
@@ -113,9 +116,9 @@ def get_tags(data):
             wd_idx += 1
     
     clusters = [[[idx, idx] for idx in eq] for eq in corefs.values()]
-    srl_list = get_srls(srls)
+    doc_srl.append(get_srls(srls))
 
-    return nes, clusters, chunk_sent, srl_list
+    return nes, clusters, chunk_sent, doc_srl
 
 
 # 係り元の根の文節番号を再帰的に導出
@@ -168,7 +171,7 @@ def finalize(nes, clusters, chunks, genre, srls):
     doc_data['doc_key'] = genre
     doc_data['constituents'] = parse
     doc_data['speakers'] = speakers
-    doc_data['srls'] = srls
+    doc_data['srl'] = srls
 
 
     #with open("./train_data/train.japanese.jsonlines", "w") as out_f:
@@ -198,6 +201,7 @@ def preprocess_bccwj():
             except:
                 print('skip {}'.format(filename))
                 continue
+            if len(['' for sentence in doc_data['sentences'] for word in sentence]) > 4000: continue
             outfile.write(json.dumps(doc_data, ensure_ascii=False))
             outfile.write('\n')
 

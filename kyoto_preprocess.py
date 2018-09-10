@@ -23,6 +23,7 @@ txt_file_pattern = re.compile(r'^(.*?).KNP$')
 wdl_path = './data/KWDLC-1.0/dat/rel/'
 txt_path = './data/KyotoCorpus4.0/dat/rel'
 
+
 # タグ単位のクラス
 class Segment:
     def __init__(self):
@@ -66,7 +67,7 @@ class Segment:
 
     def get_kaku(self):
         labels = rel_pattern.findall(self.label)
-        self.kakus = [(self.get_pattern('type', label),self.get_pattern('sid', label), self.get_pattern('tag', label)) for label in labels if self.get_pattern('type', label) == 'ガ' or self.get_pattern('type', label) == 'ヲ']
+        self.kakus = [(self.get_pattern('type', label),self.get_pattern('sid', label), self.get_pattern('tag', label), self.get_pattern('target', label)) for label in labels if re.match(r'ガ', self.get_pattern('type', label)) or re.match(r'ヲ', self.get_pattern('type', label))]
 
 # 文節単位のクラス
 class Chunk:
@@ -92,12 +93,20 @@ def get_tags(data):
     chunk = {}
     sentences = {}
     chunk_sent = []
+    sid2idx = {}
+    zero_clusters = {
+            '著者':[],
+            '読者':[],
+            }
+
+
     for idx, line in enumerate(data, 1):
         #print('processing line {} ...\n'.format(idx))
 		# get sentence id
         if line[0] == "#":
             sent_idx += 1
             sid = str(sid_pattern.search(line).group(1))
+            sid2idx[sid] = sent_idx
 		
 		# get chunk id dst
         elif line[0] == "*":
@@ -126,12 +135,28 @@ def get_tags(data):
             segments[tag_id].coref_extract()
             segments[tag_id].ne_extract()
             segments[tag_id].get_kaku()
+            
+            # ゼロ照応タグがある場合，ゼロ代名詞と助詞を補完する
+            for kaku in segments[tag_id].kakus:
+                if kaku[1] == '' or kaku[2] == '':
+                    if kaku[3] in zero_clusters: zero_clusters[kaku[3]].append([wd_idx, wd_idx + 1])
+                    else: zero_clusters[kaku[3]] = [[wd_idx, wd_idx + 1]]
+                    chunk[chunk_id].words.append({'wd_idx': wd_idx,
+                        'wd': kaku[3],
+                        'pos':'名詞',
+                        })
+                    chunk[chunk_id].words.append({'wd_idx': wd_idx + 1,
+                        'wd': type2word(kaku[0]),
+                        'pos': '助詞',
+                        })
+                    wd_idx += 2
+
 
 		# save chunks to sentences
         elif line == "EOS":
 			# assert len(segments) > 1, "Invalid process in segments"
-            assert sid not in sentences.keys(), "Invalid value in sentences"
-            sentences[sid] = {k:v for k,v in segments.items()}
+            assert sent_idx not in sentences.keys(), "Invalid value in sentences"
+            sentences[sent_idx] = {k:v for k,v in segments.items()}
             if len(chunk) > 0: chunk_sent.append(list(zip(*sorted(chunk.items(), key=lambda x:x[0])))[1])
             chunk.clear()
             segments.clear()
@@ -146,36 +171,51 @@ def get_tags(data):
                 'pos':col[3]})
             wd_idx += 1
 
-    return sentences, chunk_sent
+    clusters = [zero for zero in zero_clusters.values() if not len(zero) < 1 ] + get_clusters(sentences, sid2idx)
+    zero_ant_clusters = [zero for zero in zero_clusters.values()]
 
+    srls = get_srls(sentences, sid2idx)
+    
+
+    return sentences, chunk_sent, clusters, srls, zero_ant_clusters
+
+
+def type2word(key):
+    if re.match(r'ガ', key): return 'が'
+    elif re.match(r'ヲ', key): return 'を'
+    else: return ''
 
 # 共参照タグの整理
-def get_clusters(doc):
+def get_clusters(doc, sid2idx):
     cluster = {}
 
     for sentence in doc.values():
         for mention in sentence.values():
             for coref in mention.corefs:
-                if '{}|{}'.format(coref[2], coref[3]) not in cluster:
-                    cluster['{}|{}'.format(coref[2], coref[3])] = [doc[coref[2]][coref[3]].get_idx(), mention.get_idx()]
+                if '{}|{}'.format(sid2idx[coref[2]], coref[3]) not in cluster:
+                    cluster['{}|{}'.format(sid2idx[coref[2]], coref[3])] = [doc[sid2idx[coref[2]]][coref[3]].get_idx(), mention.get_idx()]
                 else:
-                    cluster['{}|{}'.format(coref[2], coref[3])].append(mention.get_idx())
+                    cluster['{}|{}'.format(sid2idx[coref[2]], coref[3])].append(mention.get_idx())
 
-    return cluster
+    return [v for v in cluster.values()]
 
-def get_srls(doc):
-    srls = []
+def get_srls(doc, sid2idx):
+    doc_srl = []
 
     for sentence in doc.values():
+        srls = []
         for mention in sentence.values():
+            tid = int(mention.get_idx()[0])
+            if len(mention.kakus) > 0: srls.append([tid, tid, tid, 'V'])
             for kaku in mention.kakus:
                 if kaku[1] == '' or kaku[2] == '':
-                    srls.append([mention.tag_id, -1, -1, kaku[0]])
+                    srls.append([tid, 0, 0, kaku[0]])
                 else:
-                    sgmnt_idx = doc[kaku[1]][kaku[2]].get_idx()
-                    srls.append([mention.tag_id, sgmnt_idx[0], sgmnt_idx[1], kaku[0]])
+                    sgmnt_idx = doc[sid2idx[kaku[1]]][kaku[2]].get_idx()
+                    srls.append([tid, sgmnt_idx[0], sgmnt_idx[1], kaku[0]])
+        doc_srl.append(srls)
 
-    return srls                
+    return doc_srl
 
 
 def distance_fleq(docs):
@@ -206,22 +246,23 @@ def distance_fleq(docs):
 # Output JSON file
 # speaker はすべて著者となるので同一の speaker タグを付与
 # doc_key は genre の特徴量に用いられる，コーパスごとに(kw, kt, nt, bw)の4種類のタグを付与
-def finalize(doc, chunks, genre):
+def finalize(doc, chunks, genre, clusters, srls, zeros):
     doc_data = {}
     #sentences = [[word[1] for mention in sentence.values() for word in mention.wd_list] for sentence in doc.values()]
     sentences = [[word['wd'] for chunk in sentence for word in chunk.words ]for sentence in chunks]
     speakers = [['Speaker#1' for chunk in sentence for word in chunk.words] for sentence in chunks]
-    cluster = get_clusters(doc)
     ner = [mention.get_idx() + [word[0]] for sentence in doc.values() for mention in sentence.values() for word in mention.ne_word if len(mention.ne_word) > 0]
     #parse = chunk_parser(chunks)
     parse = []
 
     doc_data['sentences'] = sentences
-    doc_data['clusters'] = [v for v in cluster.values()]
+    doc_data['clusters'] = clusters
     doc_data['ner'] = ner
     doc_data['doc_key'] = genre
     doc_data['constituents'] = parse
     doc_data['speakers'] = speakers
+    doc_data['srl'] = srls
+    doc_data['zero_clusters'] = zeros
 
 
     #with open("./train_data/train.japanese.jsonlines", "w") as out_f:
@@ -234,10 +275,10 @@ def preprocessor(filename):
     with open(filename, "r", encoding='utf-8') as f:
         data = f.read().split("\n")
         data.remove("")
-        doc, chunks = get_tags(data)
+        doc, chunks, clusters, srls, _ = get_tags(data)
         #[print(v) for sgmnt in doc.values() for v in sgmnt.values()]
         #[print(chunk) for chunk in chunks[0]]
-    return doc, chunks
+    return doc, chunks, clusters, srls, _
 
 def preprocess_kyoto():
     with codecs.open('./train_data/all.kyoto_japanese.jsonlines', 'w', 'utf-8') as outfile:
@@ -248,8 +289,8 @@ def preprocess_kyoto():
             for filename in files:
                 genre = 'kw/{0:02d}/'.format(i) + filename
                 try:
-                    doc, chunks = preprocessor(os.path.join(dir_path, filename))
-                    doc_data = finalize(doc, chunks, genre)
+                    doc, chunks, clusters, srls, _ = preprocessor(os.path.join(dir_path, filename))
+                    doc_data = finalize(doc, chunks, genre, clusters, srls, _)
                 except:
                     print('skip {}'.format(filename))
                     continue
@@ -262,8 +303,8 @@ def preprocess_kyoto():
         for filename in files:
             genre = 'kt/00/{}'.format(filename)
             try:
-                doc, chunks = preprocessor(os.path.join(txt_path, filename))
-                doc_data = finalize(doc, chunks, genre)
+                doc, chunks, clusters, srls, _ = preprocessor(os.path.join(txt_path, filename))
+                doc_data = finalize(doc, chunks, genre, clusters, srls, _)
             except:
                 print('skip {}'.format(filename))
                 continue
@@ -318,12 +359,13 @@ def test():
 def test_1file():
     dir_path = wdl_path + 'w201106-00000'
     files = [f for f in os.listdir(dir_path) if os.path.isfile(os.path.join(dir_path, f)) and file_pattern.match(f)]
-    doc, chunks = preprocessor(os.path.join(dir_path, files[10]))
-    #srls = get_srls(doc)
-    c = get_clusters(doc)
-    pprint(c)
-    [print(len(mentions)-1) for mentions in c]
+    print(files[10])
+    doc, chunks, clusters, srls = preprocessor(os.path.join(dir_path, files[10]))
+    doc_data = finalize(doc, chunks, '', clusters, srls)
+    pprint(doc_data['clusters'])
+    print('----------------------')
+    pprint(doc_data['sentences'])
 
 if __name__ == "__main__":
     #preprocess_kyoto()
-    test()
+    test_1file()

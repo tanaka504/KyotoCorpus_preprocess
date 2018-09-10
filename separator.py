@@ -6,22 +6,23 @@ import codecs
 # 前処理を行ったデータを，訓練用，開発用，評価用に分割するためのスクリプト
 # 訓練用：開発用：評価用 = 8 : 1 : 1 
 
+random.seed(1)
 
 def separate_data(name):
     with open('./train_data/all.{}_japanese.jsonlines'.format(name), 'r') as f:
         data = f.read().split('\n')
         data.remove('')
         print('all {} documents'.format(len(data)))
-        split_size = round(len(data) / 100)
+        split_size = round(len(data) / 10)
         random.shuffle(data)
         if split_size == 0:
             test = data[:1]
             dev = data[1:2]
             train = data[2:]
         else:
-            test = data[:split_size*5]
-            dev = data[split_size*5:split_size*15]
-            train = data[split_size*15:]
+            test = data[:split_size]
+            dev = data[split_size:split_size*2]
+            train = data[split_size*2:]
         print('separate to train:{} dev:{} test:{}'.format(len(train), len(dev), len(test)))
     with codecs.open('./train_data/train.{}_japanese.jsonlines'.format(name), 'w', 'utf-8') as train_f, codecs.open('./train_data/dev.{}_japanese.jsonlines'.format(name), 'w', 'utf-8') as dev_f, codecs.open('./train_data/test.{}_japanese.jsonlines'.format(name), 'w', 'utf-8') as test_f:
         train_f.write('\n'.join(train))
