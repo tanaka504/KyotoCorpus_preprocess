@@ -5,7 +5,7 @@ import nltk
 import json
 import sys
 import codecs
-
+import utils
 from collections import Counter
 
 
@@ -175,9 +175,12 @@ def get_tags(data):
     zero_ant_clusters = [zero for zero in zero_clusters.values()]
 
     srls = get_srls(sentences, sid2idx)
+
+    ner = [mention.get_idx() + [word[0]] for sentence in sentences.values() for mention in sentence.values() for word in mention.ne_word if len(mention.ne_word) > 0]
+
     
 
-    return sentences, chunk_sent, clusters, srls, zero_ant_clusters
+    return chunk_sent, clusters, ner, srls, zero_ant_clusters
 
 
 def type2word(key):
@@ -271,14 +274,13 @@ def finalize(doc, chunks, genre, clusters, srls, zeros):
     return doc_data
 
 
-def preprocessor(filename):
+def preprocessor(filename, genre):
     with open(filename, "r", encoding='utf-8') as f:
         data = f.read().split("\n")
         data.remove("")
-        doc, chunks, clusters, srls, _ = get_tags(data)
-        #[print(v) for sgmnt in doc.values() for v in sgmnt.values()]
-        #[print(chunk) for chunk in chunks[0]]
-    return doc, chunks, clusters, srls, _
+        chunks, clusters, ner, srls, zero_ants= get_tags(data)
+        doc_data = utils.finalize(chunks, clusters, ner, srls, zero_ants, genre)
+    return doc_data
 
 def preprocess_kyoto():
     with codecs.open('./train_data/all.kyoto_japanese.jsonlines', 'w', 'utf-8') as outfile:
@@ -289,8 +291,7 @@ def preprocess_kyoto():
             for filename in files:
                 genre = 'kw/{0:02d}/'.format(i) + filename
                 try:
-                    doc, chunks, clusters, srls, _ = preprocessor(os.path.join(dir_path, filename))
-                    doc_data = finalize(doc, chunks, genre, clusters, srls, _)
+                    doc_data = preprocessor(os.path.join(dir_path, filename), genre)
                 except:
                     print('skip {}'.format(filename))
                     continue
@@ -303,8 +304,7 @@ def preprocess_kyoto():
         for filename in files:
             genre = 'kt/00/{}'.format(filename)
             try:
-                doc, chunks, clusters, srls, _ = preprocessor(os.path.join(txt_path, filename))
-                doc_data = finalize(doc, chunks, genre, clusters, srls, _)
+                doc_data = preprocessor(os.path.join(txt_path, filename), genre)
             except:
                 print('skip {}'.format(filename))
                 continue
@@ -360,8 +360,7 @@ def test_1file():
     dir_path = wdl_path + 'w201106-00000'
     files = [f for f in os.listdir(dir_path) if os.path.isfile(os.path.join(dir_path, f)) and file_pattern.match(f)]
     print(files[10])
-    doc, chunks, clusters, srls = preprocessor(os.path.join(dir_path, files[10]))
-    doc_data = finalize(doc, chunks, '', clusters, srls)
+    doc_data = preprocessor(os.path.join(dir_path, files[10]), '')
     pprint(doc_data['clusters'])
     print('----------------------')
     pprint(doc_data['sentences'])

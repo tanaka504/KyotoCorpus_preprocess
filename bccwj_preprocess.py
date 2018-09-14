@@ -32,16 +32,6 @@ class Chunk:
     def get_idx(self):
         return [self.words[0]['wd_idx'], self.words[-1]['wd_idx']]
 
-class NE:
-    def __init__(self, ne):
-        self.ne = ne
-        self.wd = []
-
-    def __str__(self):
-        return '{}-{}|{}'.format(self.wd[0], self.wd[-1], self.ne)
-
-    def get_idx(self):
-        return [self.wd[0], self.wd[-1], self.ne]
 
 # タグ単位と文節単位で文情報を整理
 def get_tags(data):
@@ -84,20 +74,6 @@ def get_tags(data):
         else:
             col = line.split("\t")
             col2 = col[1].split(',')
-            # Named Entity Process (BCCWJ コーパスには固有表現タグがない)
-            #ne_tag = col[6].split('-')
-            #if ne_tag[0] == 'B':
-            #    ne = NE(ne_tag[1])
-            #    ne.wd.append(wd_idx)
-            #elif ne_tag[0] == 'I':
-            #    assert isinstance(ne, NE), 'Unexpect NEtag (without Begin)'
-            #    assert ne.ne == ne_tag[1], 'Unexpect NEtag (different Entity)'
-            #    ne.wd.append(wd_idx)
-                
-            #else:
-            #    if isinstance(ne, NE):
-            #        nes.append(ne.get_idx())
-            #        ne = None
             
             # Coreference Process
             if coref_pattern.search(col[2]):

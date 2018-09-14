@@ -6,6 +6,7 @@ import json
 import sys
 import codecs
 from collections import Counter
+import utils
 
 # 正規表現のパターン
 sid_pattern = re.compile(r"S-ID:(.*?)\s")
@@ -15,7 +16,7 @@ label_pattern = re.compile(r'(.*?)=\"(.*?)\"')
 
 file_pattern = re.compile(r'^(.*?).ntc$')
 
-ntc_path = './data/NTC_1.5/dat/ntc/ipa-utf8/'
+ntc_path = './data/NTC_1.5/dat/ntc/knp-utf8/'
 
 # 文節単位のクラス
 class Chunk:
@@ -88,22 +89,22 @@ def get_tags(data):
 		
 		# save word to segment
         else:
-            col = line.split("\t")
+            col = line.split(" ")
 
             # Named Entity Process
-            ne_tag = col[6].split('-')
-            if ne_tag[0] == 'B':
-                ne = NE(ne_tag[1])
-                ne.wd.append(wd_idx)
-            elif ne_tag[0] == 'I':
-                assert isinstance(ne, NE), 'Unexpect NEtag (without Begin)'
-                assert ne.ne == ne_tag[1], 'Unexpect NEtag (different Entity)'
-                ne.wd.append(wd_idx)
-                
-            else:
-                if isinstance(ne, NE):
-                    nes.append(ne.get_idx())
-                    ne = None
+            #ne_tag = col[6].split('-')
+            #if ne_tag[0] == 'B':
+            #    ne = NE(ne_tag[1])
+            #    ne.wd.append(wd_idx)
+            #elif ne_tag[0] == 'I':
+            #    assert isinstance(ne, NE), 'Unexpect NEtag (without Begin)'
+            #    assert ne.ne == ne_tag[1], 'Unexpect NEtag (different Entity)'
+            #    ne.wd.append(wd_idx)
+            #    
+            #else:
+            #    if isinstance(ne, NE):
+            #        nes.append(ne.get_idx())
+            #        ne = None
             
             # Coreference Process
             if coref_pattern.search(col[7]):
@@ -116,7 +117,8 @@ def get_tags(data):
 
             if not col[7] == '_':
                 # ゼロ照応の場合，ゼロ代名詞を補完
-                for tag in col[7].split(" "):
+                for tag in col[7].split("/"):
+                    if not label_pattern.search(tag): continue
                     if label_pattern.search(tag).group(1) == 'ga' and re.match(r'exo', label_pattern.search(tag).group(2)):
                         if not 'exog' in corefs: corefs['exog'] = []
                         corefs['exog'].append(wd_idx)
@@ -146,7 +148,7 @@ def get_tags(data):
     else: zero_ant_clusters = []
     doc_srl.append(get_srls(srls))
 
-    return nes, clusters, chunk_sent, doc_srl, zero_ant_clusters
+    return chunk_sent, clusters, nes, doc_srl, zero_ant_clusters
 
 
 def get_srls(srls):
@@ -175,57 +177,22 @@ def get_srls(srls):
 
     return srl_list
 
-# 係り元の根の文節番号を再帰的に導出
-def get_root(sentence, idx, src):
-    if len(src) < 1: return idx
-
-    else:
-        return min([get_root(sentence, s, sentence[s].chunk_src) for s in src])
-
-def chunk_parser(sentences):
-    # JUMANの品詞体系より
-    pos_dict = {
-            '形容詞': 'ADJ',
-            '連体詞': 'ADN',
-            '副詞': 'ADV',
-            '判定詞': 'JUDG',
-            '助動詞': 'AUXV',
-            '接続詞': 'CONJ',
-            '指示詞': 'DEMO',
-            '感動詞': 'INTJ',
-            '名詞': 'NOUN',
-            '動詞': 'VERB',
-            '助詞': 'PSTP',
-            '接頭辞': 'PREF',
-            '接尾辞': 'SUFF',
-            '特殊': 'SPE',
-            '未定義語': 'UNK',
-            }
-    # 1行で書いてて読みづらいですが，文の最後の文節から順番に係り元の左端の文節番号を取得し，
-    # 係っている文節の始めと最後の単語のインデックス及び，右端の文節の始めの単語のPOSを取得
-    roots = [[sentence[get_root(sentence, i-1, sentence[i-1].chunk_src)].get_idx()[0],sentence[i-1].get_idx()[1], pos_dict[sentence[i-1].words[0]['pos']]] for sentence in sentences for i in range(len(sentence), 0 ,-1)]
-
-    return roots
-    
 
 # Output JSON file
 # 京大コーパスで speaker はすべて著者となるので同一の speaker タグを付与
 # doc_key は genre の特徴量に用いられる，京大コーパスの場合文書かテキストコーパスかの２種類のタグを付与
 def finalize(nes, clusters, chunks, genre, srls, zeros):
     doc_data = {}
-    #sentences = [[word[1] for mention in sentence.values() for word in mention.wd_list] for sentence in doc.values()]
     sentences = [[word['wd'] for chunk in sentence for word in chunk.words ]for sentence in chunks]
-    speakers = [[u'Speaker#1' for chunk in sentence for word in chunk.words] for sentence in chunks]
-    #parse = chunk_parser(chunks)
-    parse = []
+    speakers = [['Speaker#1' for chunk in sentence for word in chunk.words] for sentence in chunks]
 
-    doc_data[u'sentences'] = sentences
-    doc_data[u'clusters'] = clusters
-    doc_data[u'ner'] = nes
-    doc_data[u'doc_key'] = genre
-    doc_data[u'constituents'] = parse
-    doc_data[u'speakers'] = speakers
-    doc_data[u'srl'] = srls
+    doc_data['sentences'] = sentences
+    doc_data['clusters'] = clusters
+    doc_data['ner'] = nes
+    doc_data['doc_key'] = genre
+    doc_data['constituents'] = []
+    doc_data['speakers'] = speakers
+    doc_data['srl'] = srls
     doc_data['zero_clusters'] = zeros
 
 
@@ -234,14 +201,13 @@ def finalize(nes, clusters, chunks, genre, srls, zeros):
     #    out_f.write("\n")
     return doc_data
 
-def preprocessor(filename):
+def preprocessor(filename, genre):
     with open(filename, "r", encoding='utf-8') as f:
         data = f.read().split("\n")
         data.remove("")
-        nes, clusters, chunks, srls, _ = get_tags(data)
-        #[print(v) for sgmnt in doc.values() for v in sgmnt.values()]
-        #[print(chunk) for chunk in chunks[0]]
-    return nes, clusters, chunks, srls, _
+        chunks, clusters, ner, srls, zero_ants = get_tags(data)
+        doc_data = utils.finalize(chunks, clusters, ner, srls, zero_ants, genre)
+    return doc_data
 
 def preprocess_ntc():
     with codecs.open('./train_data/all.ntc_japanese.jsonlines', 'w', 'utf-8') as outfile:
@@ -251,8 +217,7 @@ def preprocess_ntc():
             #print('{}/{}'.format(dir_path, filename))
             #print(genre, end='\n')
             try:
-                nes, clusters, chunks, srls, _ = preprocessor(os.path.join(ntc_path, filename))
-                doc_data = finalize(nes, clusters, chunks, genre, srls, _)
+                doc_data = preprocessor(os.path.join(ntc_path, filename), genre)
             except:
                 print('skip {}'.format(filename))
                 continue
@@ -264,13 +229,12 @@ def preprocess_ntc():
 # test at 1 file
 def test():
     files = [f for f in os.listdir(ntc_path) if os.path.isfile(os.path.join(ntc_path, f)) and file_pattern.match(f)]
-    nes, clusters, chunks, srls = preprocessor(os.path.join(ntc_path, files[20]))
-    doc_data = finalize(nes, clusters, chunks, '', srls)
+    doc_data = preprocessor(os.path.join(ntc_path, '950112-0164-950112237.ntc'), '')
     #pprint(srls)
-    print(files[20])
+    print(files[10])
     pprint(doc_data['clusters'])
     print('--------------------------')
-    pprint(doc_data['sentences'][:5])
+    pprint(doc_data['sentences'])
 
 if __name__ == "__main__":
     test()
